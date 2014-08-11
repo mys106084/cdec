@@ -1,49 +1,78 @@
 import argparse
 import logging
+import numpy as np
 from itertools import izip
 import cdec, cdec.score
 
 N = 5 # 500
 
+class BMert:
+
+    def __init__(self,config,weights_file,sources,references):
+
+        self.decoder = cdec.Decoder(config)
+        self.decoder.read_weights(weights_file)
+        self.w0 = self.decoder.weights.tosparse().copy()
+        self.sources = sources
+        self.references = references
+
+        self.feats_set=[]
+        self.cands_set=[]
+
+        self.N = N # N of the NBestList
+        self.ref_size = len(references)
+        self.BLEURecord = {}
+
+    def GenerateNBestList(self):
+        for source in self.sources:
+            hg = self.decoder.translate(source)
+            cands = hg.unique_kbest(N)
+            feats = hg.unique_kbest_features(N)
+
+            cand_list = []
+            for cand in cands:
+                cand_list.append(cand)
+
+            self.cands_set.append(cand_list)
+            self.feats_set.append(feats)
+
+    def BestCandsList(self,new_weights):
+        # idx_ref
+        best_list =[]
+        for idx_ref in range(0,self.ref_size):
+            score_list = []
+            #print idx_ref
+            for feat in self.feats_set[idx_ref]:
+                #print feat.dot(self.w0)
+                score_list.append(feat.dot(self.w0))
+            best_list.append(np.array(score_list).argmax())
+        return best_list
+
+    def Score_BLEU(self,best_list):
+        #sum_score = 0
+        cand_list = []
+        for idx_ref in xrange(0,self.ref_size):
+            #print self.references[idx_ref]
+            #print self.cands_set[idx_ref][best_list[idx_ref]]
+            if (idx_ref, best_list[idx_ref]) in self.BLEURecord:
+                sum_score += self.BLEURecord[(idx_ref, best_list[idx_ref])]
+            else:
+                cand = str(self.cands_set[best_list[idx_ref]])
+                #score = evaluate_single_BLEU(self.references[idx_ref],cand)
+                #self.BLEURecord[(idx_ref, best_list[idx_ref])] = score
+                #sum_score += score
+                #print score
+                cand_list.append(cand)
+        
+        return evaluate_BLEU(self.references,cand_list)
+        #return sum_score
 
 
-def evaluate(hyp, ref):
-    """ Compute BLEU score for a set of hypotheses+references """
+def evaluate_BLEU(ref,hyp):
     return sum(cdec.score.BLEU(r).evaluate(h) for h, r in izip(hyp, ref)).score
 
-def GenerateNBestList(decoder,sources,references):
-
-    w = decoder.weights.tosparse()
-    w0 = w.copy()
-
-    hgs = []
-    cands_set = []
-    feats_set = []
-    for source in sources:
-        hg = decoder.translate(source)
-        cands = hg.unique_kbest(N)
-        feats = hg.unique_kbest_features(N)
-
-        hgs.append(hg)
-        cands_set.append(cands)
-        feats_set.append(feats)
-
-        
-        for cand, feat in izip(cands,feats):
-            print cand
-            for f in feat:
-                print f
-
-    '''
-    candidate_sets = [cdec.score.BLEU(refs).candidate_set() for refs in references]
-    hgs = []
-    for src, candidates in izip(sources, candidate_sets):
-        hg = decoder.translate(src)
-        hgs.append(hg)
-        candidates.add_kbest(hg, N)
-    score = evaluate((hg.viterbi() for hg in hgs), references)
-    print score
-    '''
+def evaluate_single_BLEU(ref,hyp):
+    return cdec.score.BLEU(ref).evaluate(hyp).score
 
 
 def main():
@@ -58,15 +87,21 @@ def main():
 
     with open(args.config) as fp:
             config = fp.read()
-
-    decoder = cdec.Decoder(config)
-    decoder.read_weights(args.weights)
     with open(args.reference) as fp:
         references = fp.readlines()
     with open(args.source) as fp:
         sources = fp.readlines()
+
     assert len(references) == len(sources)
-    GenerateNBestList(decoder,sources,references)
+    weights_file= args.weights
+    myBMert = BMert(config,weights_file,sources,references) 
+    # 1. Generate NBestList
+    myBMert.GenerateNBestList()
+
+    # 2. Generate RefBLEUDict
+    BestCandsList = myBMert.BestCandsList(myBMert.w0) 
+
+    print myBMert.Score_BLEU(BestCandsList)
 
 
 if __name__ == '__main__':
